@@ -73,6 +73,8 @@ import org.apache.htrace.core.Tracer;
 import org.apache.htrace.core.TraceScope;
 
 import com.google.common.annotations.VisibleForTesting;
+import org.wulfnoth.blank.WBlank;
+import org.wulfnoth.blank.WBlankFactory;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.*;
@@ -98,860 +100,877 @@ import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.*;
 @InterfaceAudience.Public
 @InterfaceStability.Stable
 public abstract class FileSystem extends Configured implements Closeable {
-  public static final String FS_DEFAULT_NAME_KEY = 
-                   CommonConfigurationKeys.FS_DEFAULT_NAME_KEY;
-  public static final String DEFAULT_FS = 
-                   CommonConfigurationKeys.FS_DEFAULT_NAME_DEFAULT;
 
-  public static final Log LOG = LogFactory.getLog(FileSystem.class);
+	private static final WBlank blank = WBlankFactory.getWBlank(FileSystem.class);
 
-  /**
-   * Priority of the FileSystem shutdown hook.
-   */
-  public static final int SHUTDOWN_HOOK_PRIORITY = 10;
+	public static final String FS_DEFAULT_NAME_KEY =
+			CommonConfigurationKeys.FS_DEFAULT_NAME_KEY;
+	public static final String DEFAULT_FS =
+			CommonConfigurationKeys.FS_DEFAULT_NAME_DEFAULT;
 
-  public static final String TRASH_PREFIX = ".Trash";
+	public static final Log LOG = LogFactory.getLog(FileSystem.class);
 
-  /** FileSystem cache */
-  static final Cache CACHE = new Cache();
+	/**
+	 * Priority of the FileSystem shutdown hook.
+	 */
+	public static final int SHUTDOWN_HOOK_PRIORITY = 10;
 
-  /** The key this instance is stored under in the cache. */
-  private Cache.Key key;
+	public static final String TRASH_PREFIX = ".Trash";
 
-  /** Recording statistics per a FileSystem class */
-  private static final Map<Class<? extends FileSystem>, Statistics> 
-    statisticsTable =
-      new IdentityHashMap<Class<? extends FileSystem>, Statistics>();
+	/** FileSystem cache */
+	static final Cache CACHE = new Cache();
+
+	/** The key this instance is stored under in the cache. */
+	private Cache.Key key;
+
+	/** Recording statistics per a FileSystem class */
+	private static final Map<Class<? extends FileSystem>, Statistics>
+			statisticsTable =
+			new IdentityHashMap<Class<? extends FileSystem>, Statistics>();
   
-  /**
-   * The statistics for this file system.
-   */
-  protected Statistics statistics;
+	/**
+	 * The statistics for this file system.
+	 */
+	protected Statistics statistics;
 
-  /**
-   * A cache of files that should be deleted when filsystem is closed
-   * or the JVM is exited.
-   */
-  private Set<Path> deleteOnExit = new TreeSet<Path>();
-  
-  boolean resolveSymlinks;
+	/**
+	 * A cache of files that should be deleted when filsystem is closed
+	 * or the JVM is exited.
+	 */
+	private Set<Path> deleteOnExit = new TreeSet<Path>();
 
-  /**
-   * This method adds a file system for testing so that we can find it later. It
-   * is only for testing.
-   * @param uri the uri to store it under
-   * @param conf the configuration to store it under
-   * @param fs the file system to store
-   * @throws IOException
-   */
-  static void addFileSystemForTesting(URI uri, Configuration conf,
-      FileSystem fs) throws IOException {
-    CACHE.map.put(new Cache.Key(uri, conf), fs);
-  }
+	boolean resolveSymlinks;
 
-  /**
-   * Get a filesystem instance based on the uri, the passed
-   * configuration and the user
-   * @param uri of the filesystem
-   * @param conf the configuration to use
-   * @param user to perform the get as
-   * @return the filesystem instance
-   * @throws IOException
-   * @throws InterruptedException
-   */
-  public static FileSystem get(final URI uri, final Configuration conf,
-        final String user) throws IOException, InterruptedException {
-    String ticketCachePath =
-      conf.get(CommonConfigurationKeys.KERBEROS_TICKET_CACHE_PATH);
-    UserGroupInformation ugi =
-        UserGroupInformation.getBestUGI(ticketCachePath, user);
-    return ugi.doAs(new PrivilegedExceptionAction<FileSystem>() {
+	/**
+	 * This method adds a file system for testing so that we can find it later. It
+	 * is only for testing.
+	 * @param uri the uri to store it under
+	 * @param conf the configuration to store it under
+	 * @param fs the file system to store
+	 * @throws IOException
+	 */
+	static void addFileSystemForTesting(URI uri, Configuration conf,
+	                                    FileSystem fs)
+			throws IOException {
+		CACHE.map.put(new Cache.Key(uri, conf), fs);
+	}
+
+	/**
+	 * Get a filesystem instance based on the uri, the passed
+	 * configuration and the user
+	 * @param uri of the filesystem
+	 * @param conf the configuration to use
+	 * @param user to perform the get as
+	 * @return the filesystem instance
+	 * @throws IOException
+	 * @throws InterruptedException
+	 */
+	public static FileSystem get(final URI uri, final Configuration conf,
+	                             final String user)
+			throws IOException, InterruptedException {
+		String ticketCachePath =
+				conf.get(CommonConfigurationKeys.KERBEROS_TICKET_CACHE_PATH);
+		UserGroupInformation ugi =
+				UserGroupInformation.getBestUGI(ticketCachePath, user);
+		return ugi.doAs(new PrivilegedExceptionAction<FileSystem>() {
       @Override
       public FileSystem run() throws IOException {
         return get(uri, conf);
       }
     });
-  }
+	}
 
-  /**
-   * Returns the configured filesystem implementation.
-   * @param conf the configuration to use
-   */
-  public static FileSystem get(Configuration conf) throws IOException {
-    return get(getDefaultUri(conf), conf);
-  }
+	/**
+	 * Returns the configured filesystem implementation.
+	 * @param conf the configuration to use
+	 */
+	public static FileSystem get(Configuration conf) throws IOException {
+		return get(getDefaultUri(conf), conf);
+	}
   
-  /** Get the default filesystem URI from a configuration.
-   * @param conf the configuration to use
-   * @return the uri of the default filesystem
-   */
-  public static URI getDefaultUri(Configuration conf) {
-    return URI.create(fixName(conf.get(FS_DEFAULT_NAME_KEY, DEFAULT_FS)));
-  }
+	/** Get the default filesystem URI from a configuration.
+	 * @param conf the configuration to use
+	 * @return the uri of the default filesystem
+	 */
+	public static URI getDefaultUri(Configuration conf) {
+		return URI.create(fixName(conf.get(FS_DEFAULT_NAME_KEY, DEFAULT_FS)));
+	}
 
-  /** Set the default filesystem URI in a configuration.
-   * @param conf the configuration to alter
-   * @param uri the new default filesystem uri
-   */
-  public static void setDefaultUri(Configuration conf, URI uri) {
-    conf.set(FS_DEFAULT_NAME_KEY, uri.toString());
-  }
+	/** Set the default filesystem URI in a configuration.
+	 * @param conf the configuration to alter
+	 * @param uri the new default filesystem uri
+	 */
+	public static void setDefaultUri(Configuration conf,
+	                                 URI uri) {
+		conf.set(FS_DEFAULT_NAME_KEY, uri.toString());
+	}
 
-  /** Set the default filesystem URI in a configuration.
-   * @param conf the configuration to alter
-   * @param uri the new default filesystem uri
-   */
-  public static void setDefaultUri(Configuration conf, String uri) {
-    setDefaultUri(conf, URI.create(fixName(uri)));
-  }
+	/** Set the default filesystem URI in a configuration.
+	 * @param conf the configuration to alter
+	 * @param uri the new default filesystem uri
+	 */
+	public static void setDefaultUri(Configuration conf,
+	                                 String uri) {
+		setDefaultUri(conf, URI.create(fixName(uri)));
+	}
 
-  /** Called after a new FileSystem instance is constructed.
-   * @param name a uri whose authority section names the host, port, etc.
-   *   for this FileSystem
-   * @param conf the configuration
-   */
-  public void initialize(URI name, Configuration conf) throws IOException {
-    final String scheme;
-    if (name.getScheme() == null || name.getScheme().isEmpty()) {
-      scheme = getDefaultUri(conf).getScheme();
-    } else {
-      scheme = name.getScheme();
-    }
-    statistics = getStatistics(scheme, getClass());
-    resolveSymlinks = conf.getBoolean(
-        CommonConfigurationKeys.FS_CLIENT_RESOLVE_REMOTE_SYMLINKS_KEY,
-        CommonConfigurationKeys.FS_CLIENT_RESOLVE_REMOTE_SYMLINKS_DEFAULT);
-  }
+	/** Called after a new FileSystem instance is constructed.
+	 * @param name a uri whose authority section names the host, port, etc.
+	 *             for this FileSystem
+	 * @param conf the configuration
+	 */
+	public void initialize(URI name, Configuration conf) throws IOException {
+		final String scheme;
+		if (name.getScheme() == null || name.getScheme().isEmpty()) {
+			scheme = getDefaultUri(conf).getScheme();
+		} else {
+			scheme = name.getScheme();
+		}
+		statistics = getStatistics(scheme, getClass());
+		resolveSymlinks = conf.getBoolean(
+				CommonConfigurationKeys.FS_CLIENT_RESOLVE_REMOTE_SYMLINKS_KEY,
+				CommonConfigurationKeys.FS_CLIENT_RESOLVE_REMOTE_SYMLINKS_DEFAULT);
+	}
 
-  /**
-   * Return the protocol scheme for the FileSystem.
-   * <p/>
-   * This implementation throws an <code>UnsupportedOperationException</code>.
-   *
-   * @return the protocol scheme for the FileSystem.
-   */
-  public String getScheme() {
-    throw new UnsupportedOperationException("Not implemented by the " + getClass().getSimpleName() + " FileSystem implementation");
-  }
+	/**
+	 * Return the protocol scheme for the FileSystem.
+	 * <p/>
+	 * This implementation throws an <code>UnsupportedOperationException</code>.
+	 *
+	 * @return the protocol scheme for the FileSystem.
+	 */
+	public String getScheme() {
+		throw new UnsupportedOperationException("Not implemented by the " + getClass().getSimpleName() + " FileSystem implementation");
+	}
 
-  /** Returns a URI whose scheme and authority identify this FileSystem.*/
-  public abstract URI getUri();
-  
-  /**
-   * Return a canonicalized form of this FileSystem's URI.
-   * 
-   * The default implementation simply calls {@link #canonicalizeUri(URI)}
-   * on the filesystem's own URI, so subclasses typically only need to
-   * implement that method.
-   *
-   * @see #canonicalizeUri(URI)
-   */
-  protected URI getCanonicalUri() {
-    return canonicalizeUri(getUri());
-  }
-  
-  /**
-   * Canonicalize the given URI.
-   * 
-   * This is filesystem-dependent, but may for example consist of
-   * canonicalizing the hostname using DNS and adding the default
-   * port if not specified.
-   * 
-   * The default implementation simply fills in the default port if
-   * not specified and if the filesystem has a default port.
-   *
-   * @return URI
-   * @see NetUtils#getCanonicalUri(URI, int)
-   */
-  protected URI canonicalizeUri(URI uri) {
-    if (uri.getPort() == -1 && getDefaultPort() > 0) {
-      // reconstruct the uri with the default port set
-      try {
-        uri = new URI(uri.getScheme(), uri.getUserInfo(),
-            uri.getHost(), getDefaultPort(),
-            uri.getPath(), uri.getQuery(), uri.getFragment());
-      } catch (URISyntaxException e) {
-        // Should never happen!
-        throw new AssertionError("Valid URI became unparseable: " +
-            uri);
-      }
-    }
-    
-    return uri;
-  }
-  
-  /**
-   * Get the default port for this file system.
-   * @return the default port or 0 if there isn't one
-   */
-  protected int getDefaultPort() {
-    return 0;
-  }
+	/** Returns a URI whose scheme and authority identify this FileSystem.*/
+	public abstract URI getUri();
 
-  protected static FileSystem getFSofPath(final Path absOrFqPath,
-      final Configuration conf)
-      throws UnsupportedFileSystemException, IOException {
-    absOrFqPath.checkNotSchemeWithRelative();
-    absOrFqPath.checkNotRelative();
+	/**
+	 * Return a canonicalized form of this FileSystem's URI.
+	 *
+	 * The default implementation simply calls {@link #canonicalizeUri(URI)}
+	 * on the filesystem's own URI, so subclasses typically only need to
+	 * implement that method.
+	 *
+	 * @see #canonicalizeUri(URI)
+	 */
+	protected URI getCanonicalUri() {
+		return canonicalizeUri(getUri());
+	}
 
-    // Uses the default file system if not fully qualified
-    return get(absOrFqPath.toUri(), conf);
-  }
+	/**
+	 * Canonicalize the given URI.
+	 *
+	 * This is filesystem-dependent, but may for example consist of
+	 * canonicalizing the hostname using DNS and adding the default
+	 * port if not specified.
+	 *
+	 * The default implementation simply fills in the default port if
+	 * not specified and if the filesystem has a default port.
+	 *
+	 * @return URI
+	 * @see NetUtils#getCanonicalUri(URI, int)
+	 */
+	protected URI canonicalizeUri(URI uri) {
 
-  /**
-   * Get a canonical service name for this file system.  The token cache is
-   * the only user of the canonical service name, and uses it to lookup this
-   * filesystem's service tokens.
-   * If file system provides a token of its own then it must have a canonical
-   * name, otherwise canonical name can be null.
-   * 
-   * Default Impl: If the file system has child file systems 
-   * (such as an embedded file system) then it is assumed that the fs has no
-   * tokens of its own and hence returns a null name; otherwise a service
-   * name is built using Uri and port.
-   * 
-   * @return a service string that uniquely identifies this file system, null
-   *         if the filesystem does not implement tokens
-   * @see SecurityUtil#buildDTServiceName(URI, int)
-   */
-  @InterfaceAudience.Public
-  @InterfaceStability.Evolving
-  public String getCanonicalServiceName() {
-    return (getChildFileSystems() == null)
-      ? SecurityUtil.buildDTServiceName(getUri(), getDefaultPort())
-      : null;
-  }
+		if (uri.getPort() == -1 && getDefaultPort() > 0) {
+			// reconstruct the uri with the default port set
+			try {
+				uri = new URI(uri.getScheme(), uri.getUserInfo(),
+						uri.getHost(), getDefaultPort(),
+						uri.getPath(), uri.getQuery(), uri.getFragment());
+			} catch (URISyntaxException e) {
+				// Should never happen!
+				throw new AssertionError("Valid URI became unparseable: " +
+						uri);
+			}
+		}
 
-  /** @deprecated call #getUri() instead.*/
-  @Deprecated
-  public String getName() { return getUri().toString(); }
+		return uri;
+	}
 
-  /** @deprecated call #get(URI,Configuration) instead. */
-  @Deprecated
-  public static FileSystem getNamed(String name, Configuration conf)
-    throws IOException {
-    return get(URI.create(fixName(name)), conf);
-  }
-  
-  /** Update old-format filesystem names, for back-compatibility.  This should
-   * eventually be replaced with a checkName() method that throws an exception
-   * for old-format names. */ 
-  private static String fixName(String name) {
+	/**
+	 * Get the default port for this file system.
+	 * @return the default port or 0 if there isn't one
+	 */
+	protected int getDefaultPort() {
+		return 0;
+	}
+
+	protected static FileSystem getFSofPath(final Path absOrFqPath,
+	                                        final Configuration conf)
+			throws UnsupportedFileSystemException, IOException {
+		absOrFqPath.checkNotSchemeWithRelative();
+		absOrFqPath.checkNotRelative();
+
+		// Uses the default file system if not fully qualified
+
+		return get(absOrFqPath.toUri(), conf);
+	}
+
+	/**
+	 * Get a canonical service name for this file system.  The token cache is
+	 * the only user of the canonical service name, and uses it to lookup this
+	 * filesystem's service tokens.
+	 * If file system provides a token of its own then it must have a canonical
+	 * name, otherwise canonical name can be null.
+	 *
+	 * Default Impl: If the file system has child file systems
+	 * (such as an embedded file system) then it is assumed that the fs has no
+	 * tokens of its own and hence returns a null name; otherwise a service
+	 * name is built using Uri and port.
+	 *
+	 * @return a service string that uniquely identifies this file system, null
+	 *         if the filesystem does not implement tokens
+	 * @see SecurityUtil#buildDTServiceName(URI, int)
+	 */
+	@InterfaceAudience.Public
+	@InterfaceStability.Evolving
+	public String getCanonicalServiceName() {
+		return (getChildFileSystems() == null)
+				? SecurityUtil.buildDTServiceName(getUri(), getDefaultPort())
+				: null;
+	}
+
+	/** @deprecated call #getUri() instead.*/
+	@Deprecated
+	public String getName() { return getUri().toString(); }
+
+	/** @deprecated call #get(URI,Configuration) instead. */
+	@Deprecated
+	public static FileSystem getNamed(String name, Configuration conf)
+			throws IOException {
+		return get(URI.create(fixName(name)), conf);
+	}
+
+	/** Update old-format filesystem names, for back-compatibility.  This should
+	 * eventually be replaced with a checkName() method that throws an exception
+	 * for old-format names. */
+	private static String fixName(String name) {
     // convert old-format name to new-format name
-    if (name.equals("local")) {         // "local" is now "file:///".
-      LOG.warn("\"local\" is a deprecated filesystem name."
-               +" Use \"file:///\" instead.");
-      name = "file:///";
-    } else if (name.indexOf('/')==-1) {   // unqualified is "hdfs://"
-      LOG.warn("\""+name+"\" is a deprecated filesystem name."
-               +" Use \"hdfs://"+name+"/\" instead.");
-      name = "hdfs://"+name;
-    }
-    return name;
-  }
+		if (name.equals("local")) {     // "local" is now "file:///".
+			LOG.warn("\"local\" is a deprecated filesystem name."
+					+" Use \"file:///\" instead.");
+			name = "file:///";
+		} else if (name.indexOf('/')==-1) {   // unqualified is "hdfs://"
+			LOG.warn("\""+name+"\" is a deprecated filesystem name."
+					+" Use \"hdfs://"+name+"/\" instead.");
+			name = "hdfs://"+name;
+		}
+		return name;
+	}
 
-  /**
-   * Get the local file system.
-   * @param conf the configuration to configure the file system with
-   * @return a LocalFileSystem
-   */
-  public static LocalFileSystem getLocal(Configuration conf)
-    throws IOException {
-    return (LocalFileSystem)get(LocalFileSystem.NAME, conf);
-  }
+	/**
+	 * Get the local file system.
+	 * @param conf the configuration to configure the file system with
+	 * @return a LocalFileSystem
+	 */
+	public static LocalFileSystem getLocal(Configuration conf)
+			throws IOException {
+		return (LocalFileSystem)get(LocalFileSystem.NAME, conf);
+	}
 
-  /** Returns the FileSystem for this URI's scheme and authority.  The scheme
-   * of the URI determines a configuration property name,
-   * <tt>fs.<i>scheme</i>.class</tt> whose value names the FileSystem class.
-   * The entire URI is passed to the FileSystem instance's initialize method.
-   */
-  public static FileSystem get(URI uri, Configuration conf) throws IOException {
-    String scheme = uri.getScheme();
-    String authority = uri.getAuthority();
+	/** Returns the FileSystem for this URI's scheme and authority.  The scheme
+	 * of the URI determines a configuration property name,
+	 * <tt>fs.<i>scheme</i>.class</tt> whose value names the FileSystem class.
+	 * The entire URI is passed to the FileSystem instance's initialize method.
+	 */
+	public static FileSystem get(URI uri, Configuration conf) throws IOException {
+		String scheme = uri.getScheme();
+		String authority = uri.getAuthority();
 
-    if (scheme == null && authority == null) {     // use default FS
-      return get(conf);
-    }
+//		blank.info("scheme == null?" + ": " + (scheme == null));
+//		blank.info("authority == null?" + ": " + (authority == null));
 
-    if (scheme != null && authority == null) {     // no authority
-      URI defaultUri = getDefaultUri(conf);
-      if (scheme.equals(defaultUri.getScheme())    // if scheme matches default
-          && defaultUri.getAuthority() != null) {  // & default has authority
-        return get(defaultUri, conf);              // return default
-      }
-    }
-    
-    String disableCacheName = String.format("fs.%s.impl.disable.cache", scheme);
-    if (conf.getBoolean(disableCacheName, false)) {
-      return createFileSystem(uri, conf);
-    }
+		if (scheme == null && authority == null) {     // use default FS
+			return get(conf);
+		}
 
-    return CACHE.get(uri, conf);
-  }
+		if (scheme != null && authority == null) {     // no authority
+			URI defaultUri = getDefaultUri(conf);
+//			blank.info("scheme matches default?: " + scheme.equals(defaultUri.getScheme()));
+			if (scheme.equals(defaultUri.getScheme())    // if scheme matches default
+					&& defaultUri.getAuthority() != null) {  // & default has authority
+				return get(defaultUri, conf);              // return default
+			}
+		}
 
-  /**
-   * Returns the FileSystem for this URI's scheme and authority and the 
-   * passed user. Internally invokes {@link #newInstance(URI, Configuration)}
-   * @param uri of the filesystem
-   * @param conf the configuration to use
-   * @param user to perform the get as
-   * @return filesystem instance
-   * @throws IOException
-   * @throws InterruptedException
-   */
-  public static FileSystem newInstance(final URI uri, final Configuration conf,
-      final String user) throws IOException, InterruptedException {
-    String ticketCachePath =
-      conf.get(CommonConfigurationKeys.KERBEROS_TICKET_CACHE_PATH);
-    UserGroupInformation ugi =
-        UserGroupInformation.getBestUGI(ticketCachePath, user);
-    return ugi.doAs(new PrivilegedExceptionAction<FileSystem>() {
+		String disableCacheName = String.format("fs.%s.impl.disable.cache", scheme);
+		if (conf.getBoolean(disableCacheName, false)) {
+			return createFileSystem(uri, conf);
+		}
+
+		return CACHE.get(uri, conf);
+	}
+
+	/**
+	 * Returns the FileSystem for this URI's scheme and authority and the
+	 * passed user. Internally invokes {@link #newInstance(URI, Configuration)}
+	 * @param uri of the filesystem
+	 * @param conf the configuration to use
+	 * @param user to perform the get as
+	 * @return filesystem instance
+	 * @throws IOException
+	 * @throws InterruptedException
+	 */
+	public static FileSystem newInstance(final URI uri, final Configuration conf,
+	                                     final String user)
+			throws IOException, InterruptedException {
+		String ticketCachePath =
+				conf.get(CommonConfigurationKeys.KERBEROS_TICKET_CACHE_PATH);
+		UserGroupInformation ugi =
+				UserGroupInformation.getBestUGI(ticketCachePath, user);
+		return ugi.doAs(new PrivilegedExceptionAction<FileSystem>() {
       @Override
       public FileSystem run() throws IOException {
         return newInstance(uri,conf); 
       }
     });
-  }
-  /** Returns the FileSystem for this URI's scheme and authority.  The scheme
-   * of the URI determines a configuration property name,
-   * <tt>fs.<i>scheme</i>.class</tt> whose value names the FileSystem class.
-   * The entire URI is passed to the FileSystem instance's initialize method.
-   * This always returns a new FileSystem object.
-   */
-  public static FileSystem newInstance(URI uri, Configuration conf) throws IOException {
-    String scheme = uri.getScheme();
-    String authority = uri.getAuthority();
+	}
 
-    if (scheme == null) {                       // no scheme: use default FS
-      return newInstance(conf);
-    }
+	/** Returns the FileSystem for this URI's scheme and authority.  The scheme
+	 * of the URI determines a configuration property name,
+	 * <tt>fs.<i>scheme</i>.class</tt> whose value names the FileSystem class.
+	 * The entire URI is passed to the FileSystem instance's initialize method.
+	 * This always returns a new FileSystem object.
+	 */
+	public static FileSystem newInstance(URI uri, Configuration conf) throws IOException {
+		String scheme = uri.getScheme();
+		String authority = uri.getAuthority();
 
-    if (authority == null) {                       // no authority
-      URI defaultUri = getDefaultUri(conf);
-      if (scheme.equals(defaultUri.getScheme())    // if scheme matches default
-          && defaultUri.getAuthority() != null) {  // & default has authority
-        return newInstance(defaultUri, conf);              // return default
-      }
-    }
-    return CACHE.getUnique(uri, conf);
-  }
+		if (scheme == null) {                       // no scheme: use default FS
+			return newInstance(conf);
+		}
 
-  /** Returns a unique configured filesystem implementation.
-   * This always returns a new FileSystem object.
-   * @param conf the configuration to use
-   */
-  public static FileSystem newInstance(Configuration conf) throws IOException {
-    return newInstance(getDefaultUri(conf), conf);
-  }
+		if (authority == null) {                       // no authority
+			URI defaultUri = getDefaultUri(conf);
+			if (scheme.equals(defaultUri.getScheme())    // if scheme matches default
+					&& defaultUri.getAuthority() != null) {  // & default has authority
+				return newInstance(defaultUri, conf);              // return default
+			}
+		}
+		return CACHE.getUnique(uri, conf);
+	}
 
-  /**
-   * Get a unique local file system object
-   * @param conf the configuration to configure the file system with
-   * @return a LocalFileSystem
-   * This always returns a new FileSystem object.
-   */
-  public static LocalFileSystem newInstanceLocal(Configuration conf)
-    throws IOException {
-    return (LocalFileSystem)newInstance(LocalFileSystem.NAME, conf);
-  }
+	/** Returns a unique configured filesystem implementation.
+	 * This always returns a new FileSystem object.
+	 * @param conf the configuration to use
+	 */
+	public static FileSystem newInstance(Configuration conf) throws IOException {
+		return newInstance(getDefaultUri(conf), conf);
+	}
 
-  /**
-   * Close all cached filesystems. Be sure those filesystems are not
-   * used anymore.
-   * 
-   * @throws IOException
-   */
-  public static void closeAll() throws IOException {
-    CACHE.closeAll();
-  }
+	/**
+	 * Get a unique local file system object
+	 * @param conf the configuration to configure the file system with
+	 * @return a LocalFileSystem
+	 * This always returns a new FileSystem object.
+	 */
+	public static LocalFileSystem newInstanceLocal(Configuration conf)
+			throws IOException {
+		return (LocalFileSystem)newInstance(LocalFileSystem.NAME, conf);
+	}
 
-  /**
-   * Close all cached filesystems for a given UGI. Be sure those filesystems 
-   * are not used anymore.
-   * @param ugi user group info to close
-   * @throws IOException
-   */
-  public static void closeAllForUGI(UserGroupInformation ugi) 
-  throws IOException {
-    CACHE.closeAll(ugi);
-  }
+	/**
+	 * Close all cached filesystems. Be sure those filesystems are not
+	 * used anymore.
+	 *
+	 * @throws IOException
+	 */
+	public static void closeAll() throws IOException {
+		CACHE.closeAll();
+	}
 
-  /** 
-   * Make sure that a path specifies a FileSystem.
-   * @param path to use
-   */
-  public Path makeQualified(Path path) {
-    checkPath(path);
-    return path.makeQualified(this.getUri(), this.getWorkingDirectory());
-  }
-    
-  /**
-   * Get a new delegation token for this file system.
-   * This is an internal method that should have been declared protected
-   * but wasn't historically.
-   * Callers should use {@link #addDelegationTokens(String, Credentials)}
-   * 
-   * @param renewer the account name that is allowed to renew the token.
-   * @return a new delegation token
-   * @throws IOException
-   */
-  @InterfaceAudience.Private()
-  public Token<?> getDelegationToken(String renewer) throws IOException {
-    return null;
-  }
-  
-  /**
-   * Obtain all delegation tokens used by this FileSystem that are not
-   * already present in the given Credentials.  Existing tokens will neither
-   * be verified as valid nor having the given renewer.  Missing tokens will
-   * be acquired and added to the given Credentials.
-   * 
-   * Default Impl: works for simple fs with its own token
-   * and also for an embedded fs whose tokens are those of its
-   * children file system (i.e. the embedded fs has not tokens of its
-   * own).
-   * 
-   * @param renewer the user allowed to renew the delegation tokens
-   * @param credentials cache in which to add new delegation tokens
-   * @return list of new delegation tokens
-   * @throws IOException
-   */
-  @InterfaceAudience.Public
-  @InterfaceStability.Evolving
-  public Token<?>[] addDelegationTokens(
-      final String renewer, Credentials credentials) throws IOException {
-    if (credentials == null) {
-      credentials = new Credentials();
-    }
-    final List<Token<?>> tokens = new ArrayList<Token<?>>();
-    collectDelegationTokens(renewer, credentials, tokens);
-    return tokens.toArray(new Token<?>[tokens.size()]);
-  }
-  
-  /**
-   * Recursively obtain the tokens for this FileSystem and all descended
-   * FileSystems as determined by getChildFileSystems().
-   * @param renewer the user allowed to renew the delegation tokens
-   * @param credentials cache in which to add the new delegation tokens
-   * @param tokens list in which to add acquired tokens
-   * @throws IOException
-   */
-  private void collectDelegationTokens(final String renewer,
-                                       final Credentials credentials,
-                                       final List<Token<?>> tokens)
-                                           throws IOException {
-    final String serviceName = getCanonicalServiceName();
-    // Collect token of the this filesystem and then of its embedded children
-    if (serviceName != null) { // fs has token, grab it
-      final Text service = new Text(serviceName);
-      Token<?> token = credentials.getToken(service);
-      if (token == null) {
-        token = getDelegationToken(renewer);
-        if (token != null) {
-          tokens.add(token);
-          credentials.addToken(service, token);
-        }
-      }
-    }
-    // Now collect the tokens from the children
-    final FileSystem[] children = getChildFileSystems();
-    if (children != null) {
-      for (final FileSystem fs : children) {
-        fs.collectDelegationTokens(renewer, credentials, tokens);
-      }
-    }
-  }
+	/**
+	 * Close all cached filesystems for a given UGI. Be sure those filesystems
+	 * are not used anymore.
+	 * @param ugi user group info to close
+	 * @throws IOException
+	 */
+	public static void closeAllForUGI(UserGroupInformation ugi)
+			throws IOException {
+		CACHE.closeAll(ugi);
+	}
 
-  /**
-   * Get all the immediate child FileSystems embedded in this FileSystem.
-   * It does not recurse and get grand children.  If a FileSystem
-   * has multiple child FileSystems, then it should return a unique list
-   * of those FileSystems.  Default is to return null to signify no children.
-   * 
-   * @return FileSystems used by this FileSystem
-   */
-  @InterfaceAudience.LimitedPrivate({ "HDFS" })
-  @VisibleForTesting
-  public FileSystem[] getChildFileSystems() {
-    return null;
-  }
-  
-  /** create a file with the provided permission
-   * The permission of the file is set to be the provided permission as in
-   * setPermission, not permission&~umask
-   * 
-   * It is implemented using two RPCs. It is understood that it is inefficient,
-   * but the implementation is thread-safe. The other option is to change the
-   * value of umask in configuration to be 0, but it is not thread-safe.
-   * 
-   * @param fs file system handle
-   * @param file the name of the file to be created
-   * @param permission the permission of the file
-   * @return an output stream
-   * @throws IOException
-   */
-  public static FSDataOutputStream create(FileSystem fs,
-      Path file, FsPermission permission) throws IOException {
-    // create the file with default permission
-    FSDataOutputStream out = fs.create(file);
-    // set its permission to the supplied one
-    fs.setPermission(file, permission);
-    return out;
-  }
+	/**
+	 * Make sure that a path specifies a FileSystem.
+	 * @param path to use
+	 */
+	public Path makeQualified(Path path) {
+		checkPath(path);
+		return path.makeQualified(this.getUri(), this.getWorkingDirectory());
+	}
 
-  /** create a directory with the provided permission
-   * The permission of the directory is set to be the provided permission as in
-   * setPermission, not permission&~umask
-   * 
-   * @see #create(FileSystem, Path, FsPermission)
-   * 
-   * @param fs file system handle
-   * @param dir the name of the directory to be created
-   * @param permission the permission of the directory
-   * @return true if the directory creation succeeds; false otherwise
-   * @throws IOException
-   */
-  public static boolean mkdirs(FileSystem fs, Path dir, FsPermission permission)
-  throws IOException {
-    // create the directory using the default permission
-    boolean result = fs.mkdirs(dir);
-    // set its permission to be the supplied one
-    fs.setPermission(dir, permission);
-    return result;
-  }
+	/**
+	 * Get a new delegation token for this file system.
+	 * This is an internal method that should have been declared protected
+	 * but wasn't historically.
+	 * Callers should use {@link #addDelegationTokens(String, Credentials)}
+	 *
+	 * @param renewer the account name that is allowed to renew the token.
+	 * @return a new delegation token
+	 * @throws IOException
+	 */
+	@InterfaceAudience.Private()
+	public Token<?> getDelegationToken(String renewer) throws IOException {
+		return null;
+	}
 
-  ///////////////////////////////////////////////////////////////
-  // FileSystem
-  ///////////////////////////////////////////////////////////////
+	/**
+	 * Obtain all delegation tokens used by this FileSystem that are not
+	 * already present in the given Credentials.  Existing tokens will neither
+	 * be verified as valid nor having the given renewer.  Missing tokens will
+	 * be acquired and added to the given Credentials.
+	 *
+	 * Default Impl: works for simple fs with its own token
+	 * and also for an embedded fs whose tokens are those of its
+	 * children file system (i.e. the embedded fs has not tokens of its
+	 * own).
+	 *
+	 * @param renewer the user allowed to renew the delegation tokens
+	 * @param credentials cache in which to add new delegation tokens
+	 * @return list of new delegation tokens
+	 * @throws IOException
+	 */
+	@InterfaceAudience.Public
+	@InterfaceStability.Evolving
+	public Token<?>[] addDelegationTokens(
+			final String renewer, Credentials credentials) throws IOException {
+		if (credentials == null) {
+			credentials = new Credentials();
+		}
+		final List<Token<?>> tokens = new ArrayList<Token<?>>();
+		collectDelegationTokens(renewer, credentials, tokens);
+		return tokens.toArray(new Token<?>[tokens.size()]);
+	}
 
-  protected FileSystem() {
-    super(null);
-  }
+	/**
+	 * Recursively obtain the tokens for this FileSystem and all descended
+	 * FileSystems as determined by getChildFileSystems().
+	 * @param renewer the user allowed to renew the delegation tokens
+	 * @param credentials cache in which to add the new delegation tokens
+	 * @param tokens list in which to add acquired tokens
+	 * @throws IOException
+	 */
+	private void collectDelegationTokens(final String renewer,
+	                                     final Credentials credentials,
+	                                     final List<Token<?>> tokens)
+			throws IOException {
+		final String serviceName = getCanonicalServiceName();
+		// Collect token of the this filesystem and then of its embedded children
+		if (serviceName != null) { // fs has token, grab it
+			final Text service = new Text(serviceName);
+			Token<?> token = credentials.getToken(service);
+			if (token == null) {
+				token = getDelegationToken(renewer);
+				if (token != null) {
+					tokens.add(token);
+					credentials.addToken(service, token);
+				}
+			}
+		}
+		// Now collect the tokens from the children
+		final FileSystem[] children = getChildFileSystems();
+		if (children != null) {
+			for (final FileSystem fs : children) {
+				fs.collectDelegationTokens(renewer, credentials, tokens);
+			}
+		}
+	}
 
-  /** 
-   * Check that a Path belongs to this FileSystem.
-   * @param path to check
-   */
-  protected void checkPath(Path path) {
-    URI uri = path.toUri();
-    String thatScheme = uri.getScheme();
-    if (thatScheme == null)                // fs is relative
-      return;
-    URI thisUri = getCanonicalUri();
-    String thisScheme = thisUri.getScheme();
-    //authority and scheme are not case sensitive
-    if (thisScheme.equalsIgnoreCase(thatScheme)) {// schemes match
-      String thisAuthority = thisUri.getAuthority();
-      String thatAuthority = uri.getAuthority();
-      if (thatAuthority == null &&                // path's authority is null
-          thisAuthority != null) {                // fs has an authority
-        URI defaultUri = getDefaultUri(getConf());
-        if (thisScheme.equalsIgnoreCase(defaultUri.getScheme())) {
-          uri = defaultUri; // schemes match, so use this uri instead
-        } else {
-          uri = null; // can't determine auth of the path
-        }
-      }
-      if (uri != null) {
-        // canonicalize uri before comparing with this fs
-        uri = canonicalizeUri(uri);
-        thatAuthority = uri.getAuthority();
-        if (thisAuthority == thatAuthority ||       // authorities match
-            (thisAuthority != null &&
-             thisAuthority.equalsIgnoreCase(thatAuthority)))
-          return;
-      }
-    }
-    throw new IllegalArgumentException("Wrong FS: "+path+
+	/**
+	 * Get all the immediate child FileSystems embedded in this FileSystem.
+	 * It does not recurse and get grand children.  If a FileSystem
+	 * has multiple child FileSystems, then it should return a unique list
+	 * of those FileSystems.  Default is to return null to signify no children.
+	 *
+	 * @return FileSystems used by this FileSystem
+	 */
+	@InterfaceAudience.LimitedPrivate({ "HDFS" })
+	@VisibleForTesting
+	public FileSystem[] getChildFileSystems() {
+		return null;
+	}
+
+	/** create a file with the provided permission
+	 * The permission of the file is set to be the provided permission as in
+	 * setPermission, not permission&~umask
+	 *
+	 * It is implemented using two RPCs. It is understood that it is inefficient,
+	 * but the implementation is thread-safe. The other option is to change the
+	 * value of umask in configuration to be 0, but it is not thread-safe.
+	 *
+	 * @param fs file system handle
+	 * @param file the name of the file to be created
+	 * @param permission the permission of the file
+	 * @return an output stream
+	 * @throws IOException
+	 */
+	public static FSDataOutputStream create(FileSystem fs,
+	                                        Path file,
+	                                        FsPermission permission)
+			throws IOException {
+		// create the file with default permission
+		FSDataOutputStream out = fs.create(file);
+
+		// set its permission to the supplied one
+		fs.setPermission(file, permission);
+		return out;
+	}
+
+	/** create a directory with the provided permission
+	 * The permission of the directory is set to be the provided permission as in
+	 * setPermission, not permission&~umask
+	 *
+	 * @see #create(FileSystem, Path, FsPermission)
+	 *
+	 * @param fs file system handle
+	 * @param dir the name of the directory to be created
+	 * @param permission the permission of the directory
+	 * @return true if the directory creation succeeds; false otherwise
+	 * @throws IOException
+	 */
+	public static boolean mkdirs(FileSystem fs, Path dir, FsPermission permission)
+			throws IOException {
+		// create the directory using the default permission
+		boolean result = fs.mkdirs(dir);
+		// set its permission to be the supplied one
+		fs.setPermission(dir, permission);
+		return result;
+	}
+
+	///////////////////////////////////////////////////////////////
+	// FileSystem
+	///////////////////////////////////////////////////////////////
+
+	protected FileSystem() {
+		super(null);
+	}
+
+	/**
+	 * Check that a Path belongs to this FileSystem.
+	 * @param path to check
+	 */
+	protected void checkPath(Path path) {
+		URI uri = path.toUri();
+		String thatScheme = uri.getScheme();
+		if (thatScheme == null)                // fs is relative
+			return;
+		URI thisUri = getCanonicalUri();
+		String thisScheme = thisUri.getScheme();
+		//authority and scheme are not case sensitive
+		if (thisScheme.equalsIgnoreCase(thatScheme)) {// schemes match
+			String thisAuthority = thisUri.getAuthority();
+			String thatAuthority = uri.getAuthority();
+
+			if (thatAuthority == null &&                // path's authority is null
+					thisAuthority != null) {                // fs has an authority
+				URI defaultUri = getDefaultUri(getConf());
+				if (thisScheme.equalsIgnoreCase(defaultUri.getScheme())) {
+					uri = defaultUri; // schemes match, so use this uri instead
+				} else {
+					uri = null; // can't determine auth of the path
+				}
+			}
+			if (uri != null) {
+				// canonicalize uri before comparing with this fs
+				uri = canonicalizeUri(uri);
+				thatAuthority = uri.getAuthority();
+				if (thisAuthority == thatAuthority ||       // authorities match
+						(thisAuthority != null &&
+								thisAuthority.equalsIgnoreCase(thatAuthority)))
+					return;
+			}
+		}
+		throw new IllegalArgumentException("Wrong FS: "+path+
                                        ", expected: "+this.getUri());
-  }
+	}
 
-  /**
-   * Return an array containing hostnames, offset and size of 
-   * portions of the given file.  For a nonexistent 
-   * file or regions, null will be returned.
-   *
-   * This call is most helpful with DFS, where it returns 
-   * hostnames of machines that contain the given file.
-   *
-   * The FileSystem will simply return an elt containing 'localhost'.
-   *
-   * @param file FilesStatus to get data from
-   * @param start offset into the given file
-   * @param len length for which to get locations for
-   */
-  public BlockLocation[] getFileBlockLocations(FileStatus file, 
-      long start, long len) throws IOException {
-    if (file == null) {
-      return null;
-    }
+	/**
+	 * Return an array containing hostnames, offset and size of
+	 * portions of the given file.  For a nonexistent
+	 * file or regions, null will be returned.
+	 *
+	 * This call is most helpful with DFS, where it returns
+	 * hostnames of machines that contain the given file.
+	 *
+	 * The FileSystem will simply return an elt containing 'localhost'.
+	 *
+	 * @param file FilesStatus to get data from
+	 * @param start offset into the given file
+	 * @param len length for which to get locations for
+	 */
+	public BlockLocation[] getFileBlockLocations(FileStatus file,
+	                                             long start,
+	                                             long len)
+			throws IOException {
+		if (file == null) {
+			return null;
+		}
 
-    if (start < 0 || len < 0) {
-      throw new IllegalArgumentException("Invalid start or len parameter");
-    }
+		if (start < 0 || len < 0) {
+			throw new IllegalArgumentException("Invalid start or len parameter");
+		}
 
-    if (file.getLen() <= start) {
-      return new BlockLocation[0];
-
-    }
-    String[] name = { "localhost:50010" };
-    String[] host = { "localhost" };
-    return new BlockLocation[] {
-      new BlockLocation(name, host, 0, file.getLen()) };
-  }
+		if (file.getLen() <= start) {
+			return new BlockLocation[0];
+		}
+		String[] name = { "localhost:50010" };
+		String[] host = { "localhost" };
+		return new BlockLocation[] {
+				new BlockLocation(name, host, 0, file.getLen()) };
+	}
  
+	/**
+	 * Return an array containing hostnames, offset and size of
+	 * portions of the given file.  For a nonexistent
+	 * file or regions, null will be returned.
+	 *
+	 * This call is most helpful with DFS, where it returns
+	 * hostnames of machines that contain the given file.
+	 *
+	 * The FileSystem will simply return an elt containing 'localhost'.
+	 *
+	 * @param p path is used to identify an FS since an FS could have
+	 *          another FS that it could be delegating the call to
+	 * @param start offset into the given file
+	 * @param len length for which to get locations for
+	 */
+	public BlockLocation[] getFileBlockLocations(Path p,
+	                                             long start,
+	                                             long len)
+			throws IOException {
+		if (p == null) {
+			throw new NullPointerException();
+		}
+		FileStatus file = getFileStatus(p);
+		return getFileBlockLocations(file, start, len);
+	}
 
-  /**
-   * Return an array containing hostnames, offset and size of 
-   * portions of the given file.  For a nonexistent 
-   * file or regions, null will be returned.
-   *
-   * This call is most helpful with DFS, where it returns 
-   * hostnames of machines that contain the given file.
-   *
-   * The FileSystem will simply return an elt containing 'localhost'.
-   *
-   * @param p path is used to identify an FS since an FS could have
-   *          another FS that it could be delegating the call to
-   * @param start offset into the given file
-   * @param len length for which to get locations for
-   */
-  public BlockLocation[] getFileBlockLocations(Path p, 
-      long start, long len) throws IOException {
-    if (p == null) {
-      throw new NullPointerException();
-    }
-    FileStatus file = getFileStatus(p);
-    return getFileBlockLocations(file, start, len);
-  }
-  
-  /**
-   * Return a set of server default configuration values
-   * @return server default configuration values
-   * @throws IOException
-   * @deprecated use {@link #getServerDefaults(Path)} instead
-   */
-  @Deprecated
-  public FsServerDefaults getServerDefaults() throws IOException {
-    Configuration conf = getConf();
-    // CRC32 is chosen as default as it is available in all 
-    // releases that support checksum.
-    // The client trash configuration is ignored.
-    return new FsServerDefaults(getDefaultBlockSize(), 
-        conf.getInt("io.bytes.per.checksum", 512), 
-        64 * 1024, 
-        getDefaultReplication(),
-        conf.getInt("io.file.buffer.size", 4096),
-        false,
-        CommonConfigurationKeysPublic.FS_TRASH_INTERVAL_DEFAULT,
-        DataChecksum.Type.CRC32,
-        "");
-  }
+	/**
+	 * Return a set of server default configuration values
+	 * @return server default configuration values
+	 * @throws IOException
+	 * @deprecated use {@link #getServerDefaults(Path)} instead
+	 */
+	@Deprecated
+	public FsServerDefaults getServerDefaults() throws IOException {
+		Configuration conf = getConf();
+		// CRC32 is chosen as default as it is available in all
+		// releases that support checksum.
+		// The client trash configuration is ignored.
+		return new FsServerDefaults(getDefaultBlockSize(),
+				conf.getInt("io.bytes.per.checksum", 512),
+				64 * 1024,
+				getDefaultReplication(),
+				conf.getInt("io.file.buffer.size", 4096),
+				false,
+				CommonConfigurationKeysPublic.FS_TRASH_INTERVAL_DEFAULT,
+				DataChecksum.Type.CRC32,
+				"");
+	}
 
-  /**
-   * Return a set of server default configuration values
-   * @param p path is used to identify an FS since an FS could have
-   *          another FS that it could be delegating the call to
-   * @return server default configuration values
-   * @throws IOException
-   */
-  public FsServerDefaults getServerDefaults(Path p) throws IOException {
-    return getServerDefaults();
-  }
+	/**
+	 * Return a set of server default configuration values
+	 * @param p path is used to identify an FS since an FS could have
+	 *          another FS that it could be delegating the call to
+	 * @return server default configuration values
+	 * @throws IOException
+	 */
+	public FsServerDefaults getServerDefaults(Path p) throws IOException {
+		return getServerDefaults();
+	}
 
-  /**
-   * Return the fully-qualified path of path f resolving the path
-   * through any symlinks or mount point
-   * @param p path to be resolved
-   * @return fully qualified path 
-   * @throws FileNotFoundException
-   */
-   public Path resolvePath(final Path p) throws IOException {
-     checkPath(p);
-     return getFileStatus(p).getPath();
-   }
+	/**
+	 * Return the fully-qualified path of path f resolving the path
+	 * through any symlinks or mount point
+	 * @param p path to be resolved
+	 * @return fully qualified path
+	 * @throws FileNotFoundException
+	 */
+	public Path resolvePath(final Path p) throws IOException {
+		checkPath(p);
+		return getFileStatus(p).getPath();
+	}
 
-  /**
-   * Opens an FSDataInputStream at the indicated Path.
-   * @param f the file name to open
-   * @param bufferSize the size of the buffer to be used.
-   */
-  public abstract FSDataInputStream open(Path f, int bufferSize)
-    throws IOException;
+	/**
+	 * Opens an FSDataInputStream at the indicated Path.
+	 * @param f the file name to open
+	 * @param bufferSize the size of the buffer to be used.
+	 */
+	public abstract FSDataInputStream open(Path f, int bufferSize)
+			throws IOException;
+
+	/**
+	 * Opens an FSDataInputStream at the indicated Path.
+	 * @param f the file to open
+	 */
+	public FSDataInputStream open(Path f) throws IOException {
+		return open(f, getConf().getInt("io.file.buffer.size", 4096));
+	}
+
+	/**
+	 * Create an FSDataOutputStream at the indicated Path.
+	 * Files are overwritten by default.
+	 * @param f the file to create
+	 */
+	public FSDataOutputStream create(Path f) throws IOException {
+		return create(f, true);
+	}
+
+	/**
+	 * Create an FSDataOutputStream at the indicated Path.
+	 * @param f the file to create
+	 * @param overwrite if a file with this name already exists, then if true,
+	 *                  the file will be overwritten, and if false an exception will be thrown.
+	 */
+	public FSDataOutputStream create(Path f, boolean overwrite)
+			throws IOException {
+		return create(f, overwrite,
+				getConf().getInt("io.file.buffer.size", 4096),
+				getDefaultReplication(f),
+				getDefaultBlockSize(f));
+	}
+
+	/**
+	 * Create an FSDataOutputStream at the indicated Path with write-progress
+	 * reporting.
+	 * Files are overwritten by default.
+	 * @param f the file to create
+	 * @param progress to report progress
+	 */
+	public FSDataOutputStream create(Path f, Progressable progress)
+			throws IOException {
+		return create(f, true,
+				getConf().getInt("io.file.buffer.size", 4096),
+				getDefaultReplication(f),
+				getDefaultBlockSize(f), progress);
+	}
+
+	/**
+	 * Create an FSDataOutputStream at the indicated Path.
+	 * Files are overwritten by default.
+	 * @param f the file to create
+	 * @param replication the replication factor
+	 */
+	public FSDataOutputStream create(Path f, short replication)
+			throws IOException {
+		return create(f, true,
+				getConf().getInt("io.file.buffer.size", 4096),
+				replication, getDefaultBlockSize(f));
+	}
+
+	/**
+	 * Create an FSDataOutputStream at the indicated Path with write-progress
+	 * reporting.
+	 * Files are overwritten by default.
+	 * @param f the file to create
+	 * @param replication the replication factor
+	 * @param progress to report progress
+	 */
+	public FSDataOutputStream create(Path f, short replication,
+	                                 Progressable progress) throws IOException {
+		return create(f, true,
+				getConf().getInt(
+						CommonConfigurationKeysPublic.IO_FILE_BUFFER_SIZE_KEY,
+						CommonConfigurationKeysPublic.IO_FILE_BUFFER_SIZE_DEFAULT),
+				replication, getDefaultBlockSize(f), progress);
+	}
+
+	/**
+	 * Create an FSDataOutputStream at the indicated Path.
+	 * @param f the file name to create
+	 * @param overwrite if a file with this name already exists, then if true,
+	 *                  the file will be overwritten, and if false an error will be thrown.
+	 * @param bufferSize the size of the buffer to be used.
+	 */
+	public FSDataOutputStream create(Path f,
+	                                 boolean overwrite,
+	                                 int bufferSize)
+			throws IOException {
+		return create(f, overwrite, bufferSize,
+				getDefaultReplication(f),
+				getDefaultBlockSize(f));
+	}
+
+	/**
+	 * Create an FSDataOutputStream at the indicated Path with write-progress
+	 * reporting.
+	 * @param f the path of the file to open
+	 * @param overwrite if a file with this name already exists, then if true,
+	 *                  the file will be overwritten, and if false an error will be thrown.
+	 * @param bufferSize the size of the buffer to be used.
+	 */
+	public FSDataOutputStream create(Path f,
+	                                 boolean overwrite,
+	                                 int bufferSize,
+	                                 Progressable progress)
+			throws IOException {
+		return create(f, overwrite, bufferSize,
+				getDefaultReplication(f), getDefaultBlockSize(f), progress);
+	}
     
-  /**
-   * Opens an FSDataInputStream at the indicated Path.
-   * @param f the file to open
-   */
-  public FSDataInputStream open(Path f) throws IOException {
-    return open(f, getConf().getInt("io.file.buffer.size", 4096));
-  }
+	/**
+	 * Create an FSDataOutputStream at the indicated Path.
+	 * @param f the file name to open
+	 * @param overwrite if a file with this name already exists, then if true,
+	 *                  the file will be overwritten, and if false an error will be thrown.
+	 * @param bufferSize the size of the buffer to be used.
+	 * @param replication required block replication for the file.
+	 */
+	public FSDataOutputStream create(Path f,
+	                                 boolean overwrite,
+	                                 int bufferSize,
+	                                 short replication,
+	                                 long blockSize)
+			throws IOException {
+		return create(f, overwrite, bufferSize, replication, blockSize, null);
+	}
 
-  /**
-   * Create an FSDataOutputStream at the indicated Path.
-   * Files are overwritten by default.
-   * @param f the file to create
-   */
-  public FSDataOutputStream create(Path f) throws IOException {
-    return create(f, true);
-  }
+	/**
+	 * Create an FSDataOutputStream at the indicated Path with write-progress
+	 * reporting.
+	 * @param f the file name to open
+	 * @param overwrite if a file with this name already exists, then if true,
+	 *                  the file will be overwritten, and if false an error will be thrown.
+	 * @param bufferSize the size of the buffer to be used.
+	 * @param replication required block replication for the file.
+	 */
+	public FSDataOutputStream create(Path f,
+	                                 boolean overwrite,
+	                                 int bufferSize,
+	                                 short replication,
+	                                 long blockSize,
+	                                 Progressable progress)
+			throws IOException {
+		return this.create(f, FsPermission.getFileDefault().applyUMask(
+				FsPermission.getUMask(getConf())), overwrite, bufferSize,
+				replication, blockSize, progress);
+	}
 
-  /**
-   * Create an FSDataOutputStream at the indicated Path.
-   * @param f the file to create
-   * @param overwrite if a file with this name already exists, then if true,
-   *   the file will be overwritten, and if false an exception will be thrown.
-   */
-  public FSDataOutputStream create(Path f, boolean overwrite)
-      throws IOException {
-    return create(f, overwrite, 
-                  getConf().getInt("io.file.buffer.size", 4096),
-                  getDefaultReplication(f),
-                  getDefaultBlockSize(f));
-  }
-
-  /**
-   * Create an FSDataOutputStream at the indicated Path with write-progress
-   * reporting.
-   * Files are overwritten by default.
-   * @param f the file to create
-   * @param progress to report progress
-   */
-  public FSDataOutputStream create(Path f, Progressable progress) 
-      throws IOException {
-    return create(f, true, 
-                  getConf().getInt("io.file.buffer.size", 4096),
-                  getDefaultReplication(f),
-                  getDefaultBlockSize(f), progress);
-  }
-
-  /**
-   * Create an FSDataOutputStream at the indicated Path.
-   * Files are overwritten by default.
-   * @param f the file to create
-   * @param replication the replication factor
-   */
-  public FSDataOutputStream create(Path f, short replication)
-      throws IOException {
-    return create(f, true, 
-                  getConf().getInt("io.file.buffer.size", 4096),
-                  replication,
-                  getDefaultBlockSize(f));
-  }
-
-  /**
-   * Create an FSDataOutputStream at the indicated Path with write-progress
-   * reporting.
-   * Files are overwritten by default.
-   * @param f the file to create
-   * @param replication the replication factor
-   * @param progress to report progress
-   */
-  public FSDataOutputStream create(Path f, short replication, 
-      Progressable progress) throws IOException {
-    return create(f, true, 
-                  getConf().getInt(
-                      CommonConfigurationKeysPublic.IO_FILE_BUFFER_SIZE_KEY,
-                      CommonConfigurationKeysPublic.IO_FILE_BUFFER_SIZE_DEFAULT),
-                  replication,
-                  getDefaultBlockSize(f), progress);
-  }
-
-    
-  /**
-   * Create an FSDataOutputStream at the indicated Path.
-   * @param f the file name to create
-   * @param overwrite if a file with this name already exists, then if true,
-   *   the file will be overwritten, and if false an error will be thrown.
-   * @param bufferSize the size of the buffer to be used.
-   */
-  public FSDataOutputStream create(Path f, 
-                                   boolean overwrite,
-                                   int bufferSize
-                                   ) throws IOException {
-    return create(f, overwrite, bufferSize, 
-                  getDefaultReplication(f),
-                  getDefaultBlockSize(f));
-  }
-    
-  /**
-   * Create an FSDataOutputStream at the indicated Path with write-progress
-   * reporting.
-   * @param f the path of the file to open
-   * @param overwrite if a file with this name already exists, then if true,
-   *   the file will be overwritten, and if false an error will be thrown.
-   * @param bufferSize the size of the buffer to be used.
-   */
-  public FSDataOutputStream create(Path f, 
-                                   boolean overwrite,
-                                   int bufferSize,
-                                   Progressable progress
-                                   ) throws IOException {
-    return create(f, overwrite, bufferSize, 
-                  getDefaultReplication(f),
-                  getDefaultBlockSize(f), progress);
-  }
-    
-    
-  /**
-   * Create an FSDataOutputStream at the indicated Path.
-   * @param f the file name to open
-   * @param overwrite if a file with this name already exists, then if true,
-   *   the file will be overwritten, and if false an error will be thrown.
-   * @param bufferSize the size of the buffer to be used.
-   * @param replication required block replication for the file. 
-   */
-  public FSDataOutputStream create(Path f, 
-                                   boolean overwrite,
-                                   int bufferSize,
-                                   short replication,
-                                   long blockSize
-                                   ) throws IOException {
-    return create(f, overwrite, bufferSize, replication, blockSize, null);
-  }
-
-  /**
-   * Create an FSDataOutputStream at the indicated Path with write-progress
-   * reporting.
-   * @param f the file name to open
-   * @param overwrite if a file with this name already exists, then if true,
-   *   the file will be overwritten, and if false an error will be thrown.
-   * @param bufferSize the size of the buffer to be used.
-   * @param replication required block replication for the file. 
-   */
-  public FSDataOutputStream create(Path f,
-                                            boolean overwrite,
-                                            int bufferSize,
-                                            short replication,
-                                            long blockSize,
-                                            Progressable progress
-                                            ) throws IOException {
-    return this.create(f, FsPermission.getFileDefault().applyUMask(
-        FsPermission.getUMask(getConf())), overwrite, bufferSize,
-        replication, blockSize, progress);
-  }
-
-  /**
-   * Create an FSDataOutputStream at the indicated Path with write-progress
-   * reporting.
-   * @param f the file name to open
-   * @param permission
-   * @param overwrite if a file with this name already exists, then if true,
-   *   the file will be overwritten, and if false an error will be thrown.
-   * @param bufferSize the size of the buffer to be used.
-   * @param replication required block replication for the file.
-   * @param blockSize
-   * @param progress
-   * @throws IOException
-   * @see #setPermission(Path, FsPermission)
-   */
-  public abstract FSDataOutputStream create(Path f,
-      FsPermission permission,
-      boolean overwrite,
-      int bufferSize,
-      short replication,
-      long blockSize,
-      Progressable progress) throws IOException;
+	/**
+	 * Create an FSDataOutputStream at the indicated Path with write-progress
+	 * reporting.
+	 * @param f the file name to open
+	 * @param permission
+	 * @param overwrite if a file with this name already exists, then if true,
+	 *                  the file will be overwritten, and if false an error will be thrown.
+	 * @param bufferSize the size of the buffer to be used.
+	 * @param replication required block replication for the file.
+	 * @param blockSize
+	 * @param progress
+	 * @throws IOException
+	 * @see #setPermission(Path, FsPermission)
+	 */
+	public abstract FSDataOutputStream create(Path f,
+	                                          FsPermission permission,
+	                                          boolean overwrite,
+	                                          int bufferSize,
+	                                          short replication,
+	                                          long blockSize,
+	                                          Progressable progress)
+			throws IOException;
   
   /**
    * Create an FSDataOutputStream at the indicated Path with write-progress
@@ -2807,7 +2826,9 @@ public abstract class FileSystem extends Configured implements Closeable {
     TraceScope scope = tracer.newScope("FileSystem#createFileSystem");
     scope.addKVAnnotation("scheme", uri.getScheme());
     try {
+    	blank.info(uri.getScheme());
       Class<?> clazz = getFileSystemClass(uri.getScheme(), conf);
+      blank.info(clazz.getName());
       FileSystem fs = (FileSystem)ReflectionUtils.newInstance(clazz, conf);
       fs.initialize(uri, conf);
       return fs;

@@ -99,6 +99,8 @@ import org.apache.hadoop.crypto.key.KeyProviderDelegationTokenExtension;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import org.wulfnoth.blank.WBlank;
+import org.wulfnoth.blank.WBlankFactory;
 
 /****************************************************************
  * Implementation of the abstract FileSystem for the DFS system.
@@ -109,235 +111,243 @@ import com.google.common.base.Preconditions;
 @InterfaceAudience.LimitedPrivate({ "MapReduce", "HBase" })
 @InterfaceStability.Unstable
 public class DistributedFileSystem extends FileSystem {
-  private Path workingDir;
-  private URI uri;
-  private String homeDirPrefix =
-      HdfsClientConfigKeys.DFS_USER_HOME_DIR_PREFIX_DEFAULT;
 
-  DFSClient dfs;
-  private boolean verifyChecksum = true;
+	private static final WBlank blank = WBlankFactory.getWBlank(DistributedFileSystem.class);
 
-  private DFSOpsCountStatistics storageStatistics;
+	private Path workingDir;
+	private URI uri;
+	private String homeDirPrefix =
+			HdfsClientConfigKeys.DFS_USER_HOME_DIR_PREFIX_DEFAULT;
 
-  static{
-    HdfsConfiguration.init();
-  }
+	DFSClient dfs;
+	private boolean verifyChecksum = true;
 
-  public DistributedFileSystem() {
-  }
+	private DFSOpsCountStatistics storageStatistics;
 
-  /**
-   * Return the protocol scheme for the FileSystem.
-   * <p/>
-   *
-   * @return <code>hdfs</code>
-   */
-  @Override
-  public String getScheme() {
-    return HdfsConstants.HDFS_URI_SCHEME;
-  }
+	static {
+		HdfsConfiguration.init();
+	}
 
-  @Override
-  public URI getUri() { return uri; }
+	public DistributedFileSystem() {
+	}
 
-  @Override
-  public void initialize(URI uri, Configuration conf) throws IOException {
-    super.initialize(uri, conf);
-    setConf(conf);
+	/**
+	 * Return the protocol scheme for the FileSystem.
+	 * <p/>
+	 *
+	 * @return <code>hdfs</code>
+	 */
+	@Override
+	public String getScheme() {
+		return HdfsConstants.HDFS_URI_SCHEME;
+	}
 
-    String host = uri.getHost();
-    if (host == null) {
-      throw new IOException("Incomplete HDFS URI, no host: "+ uri);
-    }
-    homeDirPrefix = conf.get(
-        HdfsClientConfigKeys.DFS_USER_HOME_DIR_PREFIX_KEY,
-        HdfsClientConfigKeys.DFS_USER_HOME_DIR_PREFIX_DEFAULT);
+	@Override
+	public URI getUri() { return uri; }
 
-    this.dfs = new DFSClient(uri, conf, statistics);
-    this.uri = URI.create(uri.getScheme()+"://"+uri.getAuthority());
-    this.workingDir = getHomeDirectory();
+	@Override
+	public void initialize(URI uri, Configuration conf) throws IOException {
+		super.initialize(uri, conf);
+		setConf(conf);
 
-    storageStatistics = (DFSOpsCountStatistics) GlobalStorageStatistics.INSTANCE
-        .put(DFSOpsCountStatistics.NAME,
-          new StorageStatisticsProvider() {
+		String host = uri.getHost();
+		if (host == null) {
+			throw new IOException("Incomplete HDFS URI, no host: "+ uri);
+		}
+		homeDirPrefix = conf.get(
+				HdfsClientConfigKeys.DFS_USER_HOME_DIR_PREFIX_KEY,
+				HdfsClientConfigKeys.DFS_USER_HOME_DIR_PREFIX_DEFAULT);
+
+		this.dfs = new DFSClient(uri, conf, statistics);
+		this.uri = URI.create(uri.getScheme()+"://"+uri.getAuthority());
+		this.workingDir = getHomeDirectory();
+
+		storageStatistics = (DFSOpsCountStatistics) GlobalStorageStatistics.INSTANCE
+				.put(DFSOpsCountStatistics.NAME,
+						new StorageStatisticsProvider() {
             @Override
             public StorageStatistics provide() {
               return new DFSOpsCountStatistics();
             }
           });
-  }
+	}
 
-  @Override
-  public Path getWorkingDirectory() {
-    return workingDir;
-  }
+	@Override
+	public Path getWorkingDirectory() {
+		return workingDir;
+	}
 
-  @Override
-  public long getDefaultBlockSize() {
-    return dfs.getConf().getDefaultBlockSize();
-  }
+	@Override
+	public long getDefaultBlockSize() {
+		return dfs.getConf().getDefaultBlockSize();
+	}
 
-  @Override
-  public short getDefaultReplication() {
-    return dfs.getConf().getDefaultReplication();
-  }
+	@Override
+	public short getDefaultReplication() {
+		return dfs.getConf().getDefaultReplication();
+	}
 
-  @Override
-  public void setWorkingDirectory(Path dir) {
-    String result = fixRelativePart(dir).toUri().getPath();
-    if (!DFSUtilClient.isValidName(result)) {
-      throw new IllegalArgumentException("Invalid DFS directory name " +
-          result);
-    }
-    workingDir = fixRelativePart(dir);
-  }
+	@Override
+	public void setWorkingDirectory(Path dir) {
+		String result = fixRelativePart(dir).toUri().getPath();
+		if (!DFSUtilClient.isValidName(result)) {
+			throw new IllegalArgumentException("Invalid DFS directory name " +
+					result);
+		}
+		workingDir = fixRelativePart(dir);
+	}
 
-  @Override
-  public Path getHomeDirectory() {
-    return makeQualified(new Path(homeDirPrefix + "/"
-        + dfs.ugi.getShortUserName()));
-  }
+	@Override
+	public Path getHomeDirectory() {
+		return makeQualified(new Path(homeDirPrefix + "/"
+				+ dfs.ugi.getShortUserName()));
+	}
 
-  /**
-   * Checks that the passed URI belongs to this filesystem and returns
-   * just the path component. Expects a URI with an absolute path.
-   *
-   * @param file URI with absolute path
-   * @return path component of {file}
-   * @throws IllegalArgumentException if URI does not belong to this DFS
-   */
-  String getPathName(Path file) {
-    checkPath(file);
-    String result = file.toUri().getPath();
-    if (!DFSUtilClient.isValidName(result)) {
-      throw new IllegalArgumentException("Pathname " + result + " from " +
-          file+" is not a valid DFS filename.");
-    }
-    return result;
-  }
+	/**
+	 * Checks that the passed URI belongs to this filesystem and returns
+	 * just the path component. Expects a URI with an absolute path.
+	 *
+	 * @param file URI with absolute path
+	 * @return path component of {file}
+	 * @throws IllegalArgumentException if URI does not belong to this DFS
+	 */
+	String getPathName(Path file) {
+		checkPath(file);
+		String result = file.toUri().getPath();
+		if (!DFSUtilClient.isValidName(result)) {
+			throw new IllegalArgumentException("Pathname " + result + " from " +
+					file+" is not a valid DFS filename.");
+		}
+		return result;
+	}
 
-  @Override
-  public BlockLocation[] getFileBlockLocations(FileStatus file, long start,
-      long len) throws IOException {
-    if (file == null) {
-      return null;
-    }
-    return getFileBlockLocations(file.getPath(), start, len);
-  }
+	@Override
+	public BlockLocation[] getFileBlockLocations(FileStatus file, long start,
+	                                             long len) throws IOException {
+		if (file == null) {
+			return null;
+		}
+		return getFileBlockLocations(file.getPath(), start, len);
+	}
 
-  @Override
-  public BlockLocation[] getFileBlockLocations(Path p,
-      final long start, final long len) throws IOException {
-    statistics.incrementReadOps(1);
-    storageStatistics.incrementOpCounter(OpType.GET_FILE_BLOCK_LOCATIONS);
-    final Path absF = fixRelativePart(p);
-    return new FileSystemLinkResolver<BlockLocation[]>() {
-      @Override
-      public BlockLocation[] doCall(final Path p) throws IOException {
-        return dfs.getBlockLocations(getPathName(p), start, len);
-      }
-      @Override
-      public BlockLocation[] next(final FileSystem fs, final Path p)
-          throws IOException {
-        return fs.getFileBlockLocations(p, start, len);
-      }
-    }.resolve(this, absF);
-  }
+	@Override
+	public BlockLocation[] getFileBlockLocations(Path p,
+	                                             final long start,
+	                                             final long len)
+			throws IOException {
+		statistics.incrementReadOps(1);
+		storageStatistics.incrementOpCounter(OpType.GET_FILE_BLOCK_LOCATIONS);
+		final Path absF = fixRelativePart(p);
+		return new FileSystemLinkResolver<BlockLocation[]>() {
+			@Override
+			public BlockLocation[] doCall(final Path p) throws IOException {
+				return dfs.getBlockLocations(getPathName(p), start, len);
+			}
+			@Override
+			public BlockLocation[] next(final FileSystem fs, final Path p)
+					throws IOException {
+				return fs.getFileBlockLocations(p, start, len);
+			}
+		}.resolve(this, absF);
+	}
 
-  /**
-   * This API has been deprecated since the NameNode now tracks datanode
-   * storages separately. Storage IDs can be gotten from {@link
-   * BlockLocation#getStorageIds()}, which are functionally equivalent to
-   * the volume IDs returned here (although a String rather than a byte[]).
-   *
-   * Used to query storage location information for a list of blocks. This list
-   * of blocks is normally constructed via a series of calls to
-   * {@link DistributedFileSystem#getFileBlockLocations(Path, long, long)} to
-   * get the blocks for ranges of a file.
-   * 
-   * The returned array of {@link BlockStorageLocation} augments
-   * {@link BlockLocation} with a {@link VolumeId} per block replica. The
-   * VolumeId specifies the volume on the datanode on which the replica resides.
-   * The VolumeId associated with a replica may be null because volume
-   * information can be unavailable if the corresponding datanode is down or
-   * if the requested block is not found.
-   * 
-   * This API is unstable, and datanode-side support is disabled by default. It
-   * can be enabled by setting "dfs.datanode.hdfs-blocks-metadata.enabled" to
-   * true.
-   * 
-   * @param blocks
-   *          List of target BlockLocations to query volume location information
-   * @return volumeBlockLocations Augmented array of
-   *         {@link BlockStorageLocation}s containing additional volume location
-   *         information for each replica of each block.
-   */
-  @InterfaceStability.Unstable
-  @Deprecated
-  public BlockStorageLocation[] getFileBlockStorageLocations(
-      List<BlockLocation> blocks) throws IOException, 
-      UnsupportedOperationException, InvalidBlockTokenException {
-    return dfs.getBlockStorageLocations(blocks);
-  }
+	/**
+	 * This API has been deprecated since the NameNode now tracks datanode
+	 * storages separately. Storage IDs can be gotten from {@link
+	 * BlockLocation#getStorageIds()}, which are functionally equivalent to
+	 * the volume IDs returned here (although a String rather than a byte[]).
+	 *
+	 * Used to query storage location information for a list of blocks. This list
+	 * of blocks is normally constructed via a series of calls to
+	 * {@link DistributedFileSystem#getFileBlockLocations(Path, long, long)} to
+	 * get the blocks for ranges of a file.
+	 *
+	 * The returned array of {@link BlockStorageLocation} augments
+	 * {@link BlockLocation} with a {@link VolumeId} per block replica. The
+	 * VolumeId specifies the volume on the datanode on which the replica resides.
+	 * The VolumeId associated with a replica may be null because volume
+	 * information can be unavailable if the corresponding datanode is down or
+	 * if the requested block is not found.
+	 *
+	 * This API is unstable, and datanode-side support is disabled by default. It
+	 * can be enabled by setting "dfs.datanode.hdfs-blocks-metadata.enabled" to
+	 * true.
+	 *
+	 * @param blocks
+	 *          List of target BlockLocations to query volume location information
+	 * @return volumeBlockLocations Augmented array of
+	 *         {@link BlockStorageLocation}s containing additional volume location
+	 *         information for each replica of each block.
+	 */
+	@InterfaceStability.Unstable
+	@Deprecated
+	public BlockStorageLocation[] getFileBlockStorageLocations(
+			List<BlockLocation> blocks) throws IOException,
+			UnsupportedOperationException, InvalidBlockTokenException {
+		return dfs.getBlockStorageLocations(blocks);
+	}
 
-  @Override
-  public void setVerifyChecksum(boolean verifyChecksum) {
-    this.verifyChecksum = verifyChecksum;
-  }
+	@Override
+	public void setVerifyChecksum(boolean verifyChecksum) {
+		this.verifyChecksum = verifyChecksum;
+	}
 
-  /**
-   * Start the lease recovery of a file
-   *
-   * @param f a file
-   * @return true if the file is already closed
-   * @throws IOException if an error occurs
-   */
-  public boolean recoverLease(final Path f) throws IOException {
-    Path absF = fixRelativePart(f);
-    return new FileSystemLinkResolver<Boolean>() {
-      @Override
-      public Boolean doCall(final Path p) throws IOException{
-        return dfs.recoverLease(getPathName(p));
-      }
-      @Override
-      public Boolean next(final FileSystem fs, final Path p)
-          throws IOException {
-        if (fs instanceof DistributedFileSystem) {
-          DistributedFileSystem myDfs = (DistributedFileSystem)fs;
-          return myDfs.recoverLease(p);
-        }
-        throw new UnsupportedOperationException("Cannot recoverLease through" +
-            " a symlink to a non-DistributedFileSystem: " + f + " -> " + p);
-      }
-    }.resolve(this, absF);
-  }
+	/**
+	 * Start the lease recovery of a file
+	 *
+	 * @param f a file
+	 * @return true if the file is already closed
+	 * @throws IOException if an error occurs
+	 */
+	public boolean recoverLease(final Path f) throws IOException {
+		Path absF = fixRelativePart(f);
+		return new FileSystemLinkResolver<Boolean>() {
+			@Override
+			public Boolean doCall(final Path p) throws IOException{
+				return dfs.recoverLease(getPathName(p));
+			}
+			@Override
+			public Boolean next(final FileSystem fs, final Path p)
+					throws IOException {
+				if (fs instanceof DistributedFileSystem) {
+					DistributedFileSystem myDfs = (DistributedFileSystem)fs;
+					return myDfs.recoverLease(p);
+				}
+				throw new UnsupportedOperationException("Cannot recoverLease " +
+						"through" + " a symlink to a non-DistributedFileSystem: " +
+						f + " -> " + p);
+			}
+		}.resolve(this, absF);
+	}
 
-  @Override
-  public FSDataInputStream open(Path f, final int bufferSize)
-      throws IOException {
-    statistics.incrementReadOps(1);
-    storageStatistics.incrementOpCounter(OpType.OPEN);
-    Path absF = fixRelativePart(f);
-    return new FileSystemLinkResolver<FSDataInputStream>() {
-      @Override
-      public FSDataInputStream doCall(final Path p) throws IOException {
-        final DFSInputStream dfsis =
-            dfs.open(getPathName(p), bufferSize, verifyChecksum);
-        return dfs.createWrappedInputStream(dfsis);
-      }
-      @Override
-      public FSDataInputStream next(final FileSystem fs, final Path p)
-          throws IOException {
-        return fs.open(p, bufferSize);
-      }
-    }.resolve(this, absF);
-  }
+	@Override
+	public FSDataInputStream open(Path f, final int bufferSize)
+			throws IOException {
+		statistics.incrementReadOps(1);
+		storageStatistics.incrementOpCounter(OpType.OPEN);
+		Path absF = fixRelativePart(f);
+		return new FileSystemLinkResolver<FSDataInputStream>() {
+			@Override
+			public FSDataInputStream doCall(final Path p) throws IOException {
+			  blank.info("DFS doCall, Path is " + p.toString());
+				final DFSInputStream dfsis =
+						dfs.open(getPathName(p), bufferSize, verifyChecksum);
+				return dfs.createWrappedInputStream(dfsis);
+			}
+			@Override
+			public FSDataInputStream next(final FileSystem fs, final Path p)
+					throws IOException {
 
-  @Override
-  public FSDataOutputStream append(Path f, final int bufferSize,
-      final Progressable progress) throws IOException {
-    return append(f, EnumSet.of(CreateFlag.APPEND), bufferSize, progress);
-  }
+				return fs.open(p, bufferSize);
+			}
+		}.resolve(this, absF);
+	}
+
+	@Override
+	public FSDataOutputStream append(Path f, final int bufferSize,
+	                                 final Progressable progress) throws IOException {
+		return append(f, EnumSet.of(CreateFlag.APPEND), bufferSize, progress);
+	}
 
   /**
    * Append to an existing file (optional operation).
